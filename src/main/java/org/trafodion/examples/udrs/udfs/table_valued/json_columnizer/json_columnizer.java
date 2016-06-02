@@ -17,12 +17,14 @@
 //
 // @@@ END COPYRIGHT @@@
 
+package org.trafodion.examples.udrs.udfs.table_valued.json_columnizer;
+
 import org.trafodion.sql.udr.*;
 import javax.json.Json;
 import javax.json.stream.JsonParser;
 import java.io.StringReader;
 
-class json_column extends UDR {
+class json_columnizer extends UDR {
 	/* ===================================================================================
 	 *
 	 * This is a Table Mapping UDF for Trafodion
