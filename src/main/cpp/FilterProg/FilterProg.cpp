@@ -47,7 +47,7 @@
 //        TABLE(SELECT a,b,c FROM t PARTITION BY a ORDER BY b),
 //        'myprog.py',         -- executable to spawn,
 //                             -- path name relative to
-//                             -- $MY_SQROOT/external_libs/<udr name>
+//                             -- $MY_SQROOT/udr/public/external_libs
 //        'arg1 arg2 "arg 3"', -- command line arguments for new process
 //        'IIC20N18.2'))       -- description of the output columns the
 //                             -- filter program generates as a list of
@@ -380,8 +380,8 @@ void FilterProg::processData(UDRInvocationInfo &info,
   pipe(pipeForStdout);
 
   // We don't want this UDF to be able to call any executable on the
-  // system, so we sandbox it into a directory. When placing
-  // executables into that directory ($MY_SQROOT/udr/external_libs),
+  // system, so we sandbox it into a directory. When placing executables
+  // into that directory ($MY_SQROOT/udr/public/external_libs),
   // be careful to consider the security of your system.
 
   std::string exeParameter =  info.par().getString(0);
@@ -389,7 +389,7 @@ void FilterProg::processData(UDRInvocationInfo &info,
   if (exeParameter.c_str()[0] == '/')
     throw UDRException(
          38100,
-         "No absolute executable names allowed, names must be relative to $MY_SQROOT/udr/external_libs");
+         "No absolute executable names allowed, names must be relative to $MY_SQROOT/udr/public/external_libs");
 
   if (exeParameter.find("..") != std::string::npos)
     throw UDRException(
@@ -398,7 +398,7 @@ void FilterProg::processData(UDRInvocationInfo &info,
          exeParameter.c_str());
 
   struct stat exeStat;
-  sandboxDir = getenv("MY_SQROOT");
+  sandboxDir = getenv("TRAF_HOME");
 
   if (sandboxDir.empty())
     throw UDRException(
@@ -407,9 +407,7 @@ void FilterProg::processData(UDRInvocationInfo &info,
 
   if (sandboxDir.at(sandboxDir.length()-1) != '/')
     sandboxDir.append("/");
-  sandboxDir.append("udr/external_libs/");
-  sandboxDir.append(info.getUDRName());
-  sandboxDir.append("/");
+  sandboxDir.append("udr/public/external_libs/");
   executable = sandboxDir;
   executable.append(exeParameter);
 
