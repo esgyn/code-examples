@@ -47,7 +47,7 @@
 //        TABLE(SELECT a,b,c FROM t PARTITION BY a ORDER BY b),
 //        'myprog.py',         -- executable to spawn,
 //                             -- path name relative to
-//                             -- $MY_SQROOT/udr/public/external_libs
+//                             -- $TRAF_HOME/udr/public/external_libs
 //        'arg1 arg2 "arg 3"', -- command line arguments for new process
 //        'IIC20N18.2'))       -- description of the output columns the
 //                             -- filter program generates as a list of
@@ -72,9 +72,9 @@
 // Commands to compile this UDF:
 
 /*
-   # source in sqenv.sh to set MY_SQROOT and SQ_MBTYPE
-   g++ -g -I$MY_SQROOT/export/include/sql -fPIC -fshort-wchar -c -o FilterProg.o FilterProg.cpp
-   g++ -shared -rdynamic -o libfilterprog.so -lc -L$MY_SQROOT/export/lib${SQ_MBTYPE} -ltdm_sqlcli FilterProg.o
+   # source in sqenv.sh to set TRAF_HOME and SQ_MBTYPE
+   g++ -g -I$TRAF_HOME/export/include/sql -fPIC -fshort-wchar -c -o FilterProg.o FilterProg.cpp
+   g++ -shared -rdynamic -o libfilterprog.so -lc -L$TRAF_HOME/export/lib${SQ_MBTYPE} -ltdm_sqlcli FilterProg.o
  */
 
 // SQL commands to create this UDF:
@@ -381,7 +381,7 @@ void FilterProg::processData(UDRInvocationInfo &info,
 
   // We don't want this UDF to be able to call any executable on the
   // system, so we sandbox it into a directory. When placing executables
-  // into that directory ($MY_SQROOT/udr/public/external_libs),
+  // into that directory ($TRAF_HOME/udr/public/external_libs),
   // be careful to consider the security of your system.
 
   std::string exeParameter =  info.par().getString(0);
@@ -389,7 +389,7 @@ void FilterProg::processData(UDRInvocationInfo &info,
   if (exeParameter.c_str()[0] == '/')
     throw UDRException(
          38100,
-         "No absolute executable names allowed, names must be relative to $MY_SQROOT/udr/public/external_libs");
+         "No absolute executable names allowed, names must be relative to $TRAF_HOME/udr/public/external_libs");
 
   if (exeParameter.find("..") != std::string::npos)
     throw UDRException(
@@ -403,7 +403,7 @@ void FilterProg::processData(UDRInvocationInfo &info,
   if (sandboxDir.empty())
     throw UDRException(
          38110,
-         "Unable to read $MY_SQROOT environment variable");
+         "Unable to read $TRAF_HOME environment variable");
 
   if (sandboxDir.at(sandboxDir.length()-1) != '/')
     sandboxDir.append("/");
