@@ -832,8 +832,11 @@ int FilterProg::processOutput(UDRInvocationInfo &info, FilterProgContext &ctx)
             // there is at least part of another row in the buffer we read
             delimOutRow = eol;
           else
-            // we consumed the entire buffer
-            delimOutRow = NULL;
+            {
+              // we consumed the entire buffer
+              delimOutRow = NULL;
+              ctx.outputRemainderStr_.clear();
+            }
         }
       else
         {
@@ -854,6 +857,8 @@ int FilterProg::processOutput(UDRInvocationInfo &info, FilterProgContext &ctx)
                                ctx.outputLineNum_,
                                lengthLimit);
 
+          if (delimOutRow != ctx.readBufForOutput_)
+            ctx.outputRemainderStr_.clear();
           ctx.outputRemainderStr_.append(delimOutRow, newRemainderLen);
           delimOutRow = NULL;
         }
