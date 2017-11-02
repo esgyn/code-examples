@@ -231,8 +231,7 @@ public class KafkaSerialConsumer2 extends UDR {
                                         int streamTimeout) {
      Properties props = new Properties();
      props.put("bootstrap.servers", brokerString);
-     // not a group member
-     //props.put("group.id", groupId);
+     props.put("group.id", groupId);
      props.put("session.timeout.ms", "413");			// zookeeper
      props.put("auto.commit.interval.ms", "1000");
      props.put("client.id", "consumer_" + topic);
