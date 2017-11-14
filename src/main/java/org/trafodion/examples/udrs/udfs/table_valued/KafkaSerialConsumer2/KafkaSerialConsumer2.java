@@ -385,41 +385,6 @@ public class KafkaSerialConsumer2 extends UDR {
                             timestamp);
  }
 
- static public long unixTime (String timestamp) throws UDRException {
-	 // for the input timestamp string, return the equivalent Unix epoch millisecs
-	 
-	 long uxTime = -1;
-	 // uses trafodion function juliantimestamp
-	 
-	try {	
-	 // T4
-		Class.forName( "org.trafodion.jdbc.t4.T4Driver" ) ; //loads the driver
-		String url = "jdbc:t4jdbc://nap007:23400/:";				// T4
-		
-		// T2
-		//Class.forName( "org.trafodion.jdbc.t2.T2Driver" ) ; //loads the driver
-		//String url = "jdbc:t2jdbc:";                        // T2
-		Connection con = DriverManager.getConnection( url, "trafodion", "traf123" ) ;
-		PreparedStatement s =
-			con.prepareStatement("select juliantimestamp(timestamp '" + timestamp + "') - " +
-								 " juliantimestamp(timestamp '1970-01-01 00:00:00') from dual");
-		ResultSet r = s.executeQuery();
-		r.next();
-		uxTime = r.getLong(1) / 1000;		// usec -> ms
-		
-		r.close();
-		s.close();
-		con.close();
-	} 
-	catch (ClassNotFoundException e) {
-			throw new UDRException (38100, "JDBC class not found: " + e.getMessage());
-	} 
-	catch (SQLException e) {
-		throw new UDRException (38110, "SQL error: " + e.getMessage());
-	}
-	
-	 return uxTime;
- }
  @Override
  public void describeParamsAndColumns(UDRInvocationInfo info) throws UDRException {
      // input parameter values
@@ -455,7 +420,7 @@ public class KafkaSerialConsumer2 extends UDR {
                             in.topic_,
                             in.streamTimeout_);
          // timestamp -> epoch form
-         long uxTime = unixTime(in.timestamp_);
+         long uxTime = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(in.timestamp_).getTime();
          // designate partition to use
          TopicPartition desiredPartition = new TopicPartition(in.topic_, in.partition_);
          Map<TopicPartition, Long> pTsMap = new HashMap<TopicPartition, Long>();
@@ -534,7 +499,7 @@ public class KafkaSerialConsumer2 extends UDR {
     	 // convert input timestamp to epoch form, then find the correspoinding offset
     	 // in this partition
          // timestamp -> epoch form
-         long uxTime = unixTime(timestamp);
+         long uxTime = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(timestamp).getTime();
          // designate partition to use
          TopicPartition desiredPartition = new TopicPartition(topic, partition);
          Map<TopicPartition, Long> pTsMap = new HashMap<TopicPartition, Long>();
