@@ -29,6 +29,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <time.h>
 
 // FilterProg TMUDF
 //
@@ -185,14 +186,24 @@ struct FilterProgContext
   const char *startupFilterError_;
   int startupFilterErrorLen_;
 
-  // carry-over data from one call of processInput/Output to the next
-  std::string inputRemainderStr_;
+  // delimited string created from an input row
+  std::string delimitedInputStr_;
+  // length of the delimited string already written
+  // to the filter program
   ssize_t inputBytesAlreadyWritten_;
+  // a string holding partial delimited row(s) from
+  // the filter program's output
   std::string outputRemainderStr_;
 
   // state
   bool moreInputRows_;  // is there a potential for more input rows
   bool moreOutputRows_; // has the filter sent EOF (or died)
+  bool inputBlocked_;   // pipe to program's stdin is full
+  bool outputBlocked_;  // pipe from program's stdout is empty
+  long sleepTime_;      // exponentially increasing sleep time
+  long totalSleepTime_; // statistics on total time spent in sleep
+  long numSleeps_;      // number of times we slept
+  long totalLoops_;     // statistics on number of loops in main prog
   bool filterExited_;   // filter program has ended already
   long inputRowNum_;    // input line number for error messages
   long outputLineNum_;  // output line number for error messages
@@ -445,6 +456,12 @@ void FilterProg::processData(UDRInvocationInfo &info,
   ctx.inputBytesAlreadyWritten_ = 0;
   ctx.moreInputRows_ = (info.getNumTableInputs() > 0);
   ctx.moreOutputRows_ = true;
+  ctx.inputBlocked_ = false;
+  ctx.outputBlocked_ = false;
+  ctx.sleepTime_ = 1;
+  ctx.totalSleepTime_ = 0;
+  ctx.numSleeps_ = 0;
+  ctx.totalLoops_ = 0;
   ctx.filterExited_ = false;
   ctx.inputRowNum_ = 1;
   ctx.outputLineNum_ = 1;
@@ -610,14 +627,23 @@ int FilterProg::processInput(UDRInvocationInfo &info, FilterProgContext &ctx)
 
   // returns true if we should keep calling this method, false if we are done processing input
   int result = 1;
+  int remainderLen = ctx.delimitedInputStr_.size();
 
-  std::string freshInputStr;
-  int remainderLen = ctx.inputRemainderStr_.size();
+  // We reach here in one of the following situations:
+  // a) We have nothing to remember from the last call to processInput(), if
+  //    any. Get a new input row and try to send part or all of it to the
+  //    filter program. In this case, remainderLen is 0.
+  // b) We read an input row in a previous call to processInput() and could
+  //    not send all of it (maybe none of it) to the filter program.
+  //    In this case, remainderLen is > 0 and ctx.inputBytesAlreadyWritten_
+  //    indicates how many bytes of ctx.delimitedInputStr_ we have already
+  //    sent. If we could not send any bytes in the last call, then
+  //    ctx.inputBlocked_ is true.
 
   if (remainderLen == 0)
     {
       // ----------------------------------------------------------
-      // we need a new input row
+      // a) we need a new input row
       // ----------------------------------------------------------
       result = (getNextRow(info) ? 1 : 0);
 
@@ -625,12 +651,12 @@ int FilterProg::processInput(UDRInvocationInfo &info, FilterProgContext &ctx)
         {
           // we got an input row to send to our filter program,
           // construct a delimited row and write it to the pipe
-          info.in().getDelimitedRow(freshInputStr,
+          info.in().getDelimitedRow(ctx.delimitedInputStr_,
                                     ctx.fieldDelimiter_,
                                     ctx.useQuotes_,
                                     ctx.quote_);
           // append a record delimiter
-          freshInputStr.append(1, ctx.recordDelimiter_);
+          ctx.delimitedInputStr_.append(1, ctx.recordDelimiter_);
         }
       else
         {
@@ -643,28 +669,30 @@ int FilterProg::processInput(UDRInvocationInfo &info, FilterProgContext &ctx)
           ctx.moreInputRows_ = false;
         }
     }
+  // else b), ctx.delimitedInputStr_ is already set and result == 1
 
   if (result)
     {
       // Now we have either a leftover from a previous call to write
-      // or a fresh delimited row that we just read. Send all or part
-      // of it to the filter process.
+      // or a fresh delimited row that we just read or a row we read
+      // in a previous call but couldn't send because the pipe was
+      // full. Send all or part of it to the filter process.
 
       const char *writeBuf = NULL;
       size_t bytesToWrite = 0;
 
       if (remainderLen > 0)
         {
-          // write the remainder of the remainder string, the part that
+          // write the remainder of the delimited string, the part that
           // has not yet been written
-          writeBuf = ctx.inputRemainderStr_.data() + ctx.inputBytesAlreadyWritten_;
+          writeBuf = ctx.delimitedInputStr_.data() + ctx.inputBytesAlreadyWritten_;
           bytesToWrite = remainderLen - ctx.inputBytesAlreadyWritten_;
         }
       else
         {
           // write the fresh string
-          writeBuf = freshInputStr.data();
-          bytesToWrite = freshInputStr.size();
+          writeBuf = ctx.delimitedInputStr_.data();
+          bytesToWrite = ctx.delimitedInputStr_.size();
         }
 
       // try to write some data to the pipe that is connected with the
@@ -677,35 +705,23 @@ int FilterProg::processInput(UDRInvocationInfo &info, FilterProgContext &ctx)
         {
           // we successfully sent one input line to the filter process
           ctx.inputRowNum_++;
-          if (remainderLen)
-            {
-              // clear the remainder, we are done
-              ctx.inputRemainderStr_.clear();
-              ctx.inputBytesAlreadyWritten_ = 0;
-            }
+          ctx.inputBlocked_ = false;
+          ctx.delimitedInputStr_.clear();
+          ctx.inputBytesAlreadyWritten_ = 0;
         }
       else if (bytesWritten >= 0)
         {
           // success, but not all data was written
-          if (remainderLen)
-            {
-              // update the length of the remainder we have
-              // already written (it's going to take multiple
-              // tries)
-              ctx.inputBytesAlreadyWritten_ += bytesWritten;
-            }
-          else
-            {
-              // copy whatever is left of the fresh string into the
-              // remainder string
-              ctx.inputRemainderStr_.assign(freshInputStr.data() + bytesWritten,
-                                            bytesToWrite - bytesWritten);
-              ctx.inputBytesAlreadyWritten_ = 0;
-            }
+          ctx.inputBytesAlreadyWritten_ += bytesWritten;
+          ctx.inputBlocked_ = (bytesWritten == 0);
         }
       else // bytesWritten < 0
         {
-          if (errno != EAGAIN)
+          if (errno == EAGAIN)
+            // we need to wait a while until the program has
+            // had time to consume some rows
+            ctx.inputBlocked_ = true;
+          else
             throw UDRException(
                  38310,
                  "Error %d while sending input data to the pipe process at input row number %ld",
@@ -737,14 +753,18 @@ int FilterProg::processOutput(UDRInvocationInfo &info, FilterProgContext &ctx)
   if (bytesRead < 0)
     {
       if (errno == EAGAIN)
-        // need to wait for more output
-        return 1;
+        {
+          ctx.outputBlocked_ = true;
+          // need to wait for more output
+          return 1;
+        }
 
       throw UDRException(38320,
                          "Error %d during read from process output",
                          (int) errno);
     }
 
+  ctx.outputBlocked_ = false;
   if (bytesRead == 0 && remainderLen == 0)
     // this indicates EOF, we are done
     return 0;
@@ -873,6 +893,8 @@ int FilterProg::checkChild(FilterProgContext &ctx)
   int filterExitStatus = 0;
   int waitOptions = 0;
 
+  ctx.totalLoops_++;
+
   if (ctx.filterExited_ || ctx.filterPid_ == 0)
     return 0;
 
@@ -884,8 +906,29 @@ int FilterProg::checkChild(FilterProgContext &ctx)
   pid_t waitResult = waitpid(ctx.filterPid_, &filterExitStatus, waitOptions);
 
   if (waitResult >= 0 && waitResult != ctx.filterPid_)
-    // nothing happened to our filter process
-    return 1;
+    {
+      // nothing happened to our filter process
+
+      // sleep for a while if the filter process neither accepts more input
+      // nor produces more output
+      if ((ctx.inputBlocked_ || !ctx.moreInputRows_) && ctx.outputBlocked_)
+        {
+          // wait exponentially increasing intervals from 1 msec to 4 sec
+          long sleepTimeMsec =
+            (ctx.sleepTime_ <= 4000 ? 2 * ctx.sleepTime_ : 4000);
+          struct timespec ts = { sleepTimeMsec / 1000,
+                                 (sleepTimeMsec % 1000) * 1000000 };
+
+          nanosleep(&ts, NULL);
+          ctx.sleepTime_ = sleepTimeMsec;
+          ctx.totalSleepTime_ += sleepTimeMsec;
+          ctx.numSleeps_++;
+        }
+      else
+        ctx.sleepTime_ = 1;
+
+      return 1;
+    }
 
   // check for error returns
   if (WIFEXITED(filterExitStatus))
