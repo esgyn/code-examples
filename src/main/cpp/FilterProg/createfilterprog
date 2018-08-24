@@ -1,0 +1,35 @@
+#!/bin/bash
+
+mkdir -p ~/src/FilterProg
+cd ~/src/FilterProg
+wget https://raw.githubusercontent.com/esgyn/code-examples/master/src/main/cpp/FilterProg/FilterProg.cpp
+g++ -g -I$TRAF_HOME/export/include/sql -fPIC -fshort-wchar -c -o FilterProg.o FilterProg.cpp
+g++ -shared -rdynamic -o libfilterprog.so -lc -L$TRAF_HOME/export/lib${SQ_MBTYPE} -ltdm_sqlcli FilterProg.o
+
+UDR_LOC=$PWD
+
+if [ -n "$CLUSTERNAME" ]; then
+  which pdcp >/dev/null
+  if [ $? -eq 0 ]; then
+    # on a cluster, copy the DLL to all nodes
+    UDR_LOC=$TRAF_HOME/udr/public/external_libs
+    pdsh $MY_NODES mkdir -p $UDR_LOC
+    pdcp $MY_NODES libfilterprog.so $UDR_LOC
+  else
+    echo "pdcp command is required by this script"
+    exit 99
+  fi
+fi
+
+sqlci <<EOF
+   drop function filterprog;
+   drop library filterproglib;
+   create library filterproglib file
+    '$UDR_LOC/libfilterprog.so';
+
+   create table_mapping function filterprog()
+      external name 'TRAF_CPP_FILTERPROG' -- name of factory method
+      language cpp
+      library filterproglib;
+
+EOF
